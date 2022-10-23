@@ -1,0 +1,1 @@
+../../../docs/multidomain-site-example/site.mk

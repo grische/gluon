@@ -1,0 +1,664 @@
+From 49d0d48553bdc37dd5056d93a1e00f7302f77af7 Mon Sep 17 00:00:00 2001
+From: David Bauer <mail@david-bauer.net>
+Date: Sat, 18 Mar 2023 02:28:23 +0100
+Subject: [PATCH] mpc85xx: add support for Enterasys WS-AP3715i
+
+Hardware
+--------
+
+SoC:   NXP P1010 (1x e500 @ 800MHz)
+RAM:   256M DDR3 (2x Samsung K4B1G1646G-BCH9)
+FLASH: 32M NOR (Spansion S25FL256S)
+BTN:   1x Reset
+WiFi:  1x Atheros AR9590 2.4 bgn 3x3
+       2x Atheros AR9590 5.0 an 3x3
+ETH:   2x Gigabit Ethernet (Atheros AR8033 / AR8035)
+UART:  115200 8N1 (RJ-45 Cisco)
+
+Installation
+------------
+1. Grab the OpenWrt initramfs, rename it to ap3715.bin. Place it in
+   the root directory of a TFTP server and serve it at
+   192.168.1.66/24.
+
+2. Connect to the serial port and boot the AP. Stop autoboot in U-Boot
+   by pressing Enter when prompted. Credentials are identical to the one
+   in the APs interface. By default it is admin / new2day.
+
+3. Alter the bootcmd in U-Boot:
+
+ $ setenv ramboot_openwrt "setenv ipaddr 192.168.1.1;
+   setenv serverip 192.168.1.66; tftpboot 0x2000000 ap3715.bin; bootm"
+
+ $ setenv boot_openwrt "sf probe 0; sf read 0x2000000 0x140000 0x1000000;
+   bootm 0x2000000"
+
+ $ setenv bootcmd "run boot_openwrt"
+
+ $ saveenv
+
+4. Boot the initramfs image
+
+ $ run ramboot_openwrt
+
+5. Transfer the OpenWrt sysupgrade image to the AP using SCP. Install
+   using sysupgrade.
+
+ $ sysupgrade -n <path-to-sysupgrade.bin>
+
+Signed-off-by: David Bauer <mail@david-bauer.net>
+---
+ package/boot/uboot-envtools/files/mpc85xx     |   4 +
+ .../mpc85xx/base-files/etc/board.d/01_leds    |   1 +
+ .../mpc85xx/base-files/etc/board.d/02_network |   3 +-
+ .../etc/hotplug.d/ieee80211/10-fix-wifi-mac   |   4 +
+ .../base-files/lib/preinit/10_fix_eth_mac.sh  |   1 +
+ target/linux/mpc85xx/config-5.10              |   1 +
+ .../arch/powerpc/boot/dts/ws-ap3715i.dts      | 293 ++++++++++++++++++
+ .../arch/powerpc/platforms/85xx/ws-ap3715i.c  |  87 ++++++
+ target/linux/mpc85xx/image/p1010.mk           |  13 +
+ target/linux/mpc85xx/p1010/config-default     |   4 +
+ target/linux/mpc85xx/p1010/target.mk          |   2 +-
+ ...-powerpc-85xx-add-ws-ap3715i-support.patch |  58 ++++
+ 12 files changed, 469 insertions(+), 2 deletions(-)
+ create mode 100644 target/linux/mpc85xx/files/arch/powerpc/boot/dts/ws-ap3715i.dts
+ create mode 100644 target/linux/mpc85xx/files/arch/powerpc/platforms/85xx/ws-ap3715i.c
+ create mode 100644 target/linux/mpc85xx/patches-5.10/109-powerpc-85xx-add-ws-ap3715i-support.patch
+
+diff --git a/package/boot/uboot-envtools/files/mpc85xx b/package/boot/uboot-envtools/files/mpc85xx
+index 6d389c5b57..a74466ab3a 100644
+--- a/package/boot/uboot-envtools/files/mpc85xx
++++ b/package/boot/uboot-envtools/files/mpc85xx
+@@ -8,6 +8,10 @@ touch /etc/config/ubootenv
+ board=$(board_name)
+ 
+ case "$board" in
++enterasys,ws-ap3715i)
++	ubootenv_add_uci_config "$(find_mtd_part 'cfg1')" "0x0" "0x10000" "0x10000"
++	ubootenv_add_uci_config "$(find_mtd_part 'cfg2')" "0x0" "0x10000" "0x10000"
++	;;
+ extreme-networks,ws-ap3825i)
+ 	ubootenv_add_uci_config "$(find_mtd_part 'cfg1')" "0x0" "0x10000" "0x20000"
+ 	ubootenv_add_uci_config "$(find_mtd_part 'cfg2')" "0x0" "0x10000" "0x20000"
+diff --git a/target/linux/mpc85xx/base-files/etc/board.d/01_leds b/target/linux/mpc85xx/base-files/etc/board.d/01_leds
+index 391c909e4c..d9b4d2d79d 100644
+--- a/target/linux/mpc85xx/base-files/etc/board.d/01_leds
++++ b/target/linux/mpc85xx/base-files/etc/board.d/01_leds
+@@ -8,6 +8,7 @@ boardname="${board##*,}"
+ board_config_update
+ 
+ case $board in
++enterasys,ws-ap3715i|\
+ extreme-networks,ws-ap3825i)
+ 	ucidef_set_led_netdev "lan1" "LAN1" "green:lan1" "eth1"
+ 	ucidef_set_led_netdev "lan2" "LAN2" "green:lan2" "eth0"
+diff --git a/target/linux/mpc85xx/base-files/etc/board.d/02_network b/target/linux/mpc85xx/base-files/etc/board.d/02_network
+index 7b34f9f308..48a390e216 100644
+--- a/target/linux/mpc85xx/base-files/etc/board.d/02_network
++++ b/target/linux/mpc85xx/base-files/etc/board.d/02_network
+@@ -9,7 +9,8 @@ board_config_update
+ board=$(board_name)
+ 
+ case "$board" in
+-aerohive,hiveap-330)
++aerohive,hiveap-330|\
++enterasys,ws-ap3715i)
+ 	ucidef_set_interfaces_lan_wan "eth1" "eth0"
+ 	;;
+ ocedo,panda)
+diff --git a/target/linux/mpc85xx/base-files/etc/hotplug.d/ieee80211/10-fix-wifi-mac b/target/linux/mpc85xx/base-files/etc/hotplug.d/ieee80211/10-fix-wifi-mac
+index 8050c7bea2..20ad8eb44f 100644
+--- a/target/linux/mpc85xx/base-files/etc/hotplug.d/ieee80211/10-fix-wifi-mac
++++ b/target/linux/mpc85xx/base-files/etc/hotplug.d/ieee80211/10-fix-wifi-mac
+@@ -12,6 +12,10 @@ PHYNBR=${DEVPATH##*/phy}
+ board=$(board_name)
+ 
+ case "$board" in
++enterasys,ws-ap3715i)
++	[ "$PHYNBR" -eq 0 ] && mtd_get_mac_ascii cfg2 RADIOADDR1 > /sys${DEVPATH}/macaddress
++	[ "$PHYNBR" -eq 1 ] && mtd_get_mac_ascii cfg2 RADIOADDR0 > /sys${DEVPATH}/macaddress
++	;;
+ enterasys,ws-ap3710i|\
+ extreme-networks,ws-ap3825i)
+ 	mtd_get_mac_ascii cfg2 RADIOADDR${PHYNBR} > /sys${DEVPATH}/macaddress
+diff --git a/target/linux/mpc85xx/base-files/lib/preinit/10_fix_eth_mac.sh b/target/linux/mpc85xx/base-files/lib/preinit/10_fix_eth_mac.sh
+index d84ab5f186..bfd39950e2 100644
+--- a/target/linux/mpc85xx/base-files/lib/preinit/10_fix_eth_mac.sh
++++ b/target/linux/mpc85xx/base-files/lib/preinit/10_fix_eth_mac.sh
+@@ -2,6 +2,7 @@
+ 
+ preinit_set_mac_address() {
+ 	case $(board_name) in
++	enterasys,ws-ap3715i|\
+ 	extreme-networks,ws-ap3825i)
+ 		ip link set dev eth0 address $(mtd_get_mac_ascii cfg1 ethaddr)
+ 		ip link set dev eth1 address $(mtd_get_mac_ascii cfg1 eth1addr)
+diff --git a/target/linux/mpc85xx/config-5.10 b/target/linux/mpc85xx/config-5.10
+index 4c63527d9d..ac44cc539a 100644
+--- a/target/linux/mpc85xx/config-5.10
++++ b/target/linux/mpc85xx/config-5.10
+@@ -274,6 +274,7 @@ CONFIG_VDSO32=y
+ CONFIG_VM_EVENT_COUNTERS=y
+ CONFIG_WATCHDOG_CORE=y
+ # CONFIG_WS_AP3710I is not set
++# CONFIG_WS_AP3715I is not set
+ # CONFIG_WS_AP3825I is not set
+ # CONFIG_XES_MPC85xx is not set
+ CONFIG_XZ_DEC_BCJ=y
+diff --git a/target/linux/mpc85xx/files/arch/powerpc/boot/dts/ws-ap3715i.dts b/target/linux/mpc85xx/files/arch/powerpc/boot/dts/ws-ap3715i.dts
+new file mode 100644
+index 0000000000..d13952acae
+--- /dev/null
++++ b/target/linux/mpc85xx/files/arch/powerpc/boot/dts/ws-ap3715i.dts
+@@ -0,0 +1,293 @@
++// SPDX-License-Identifier: GPL-2.0-or-later or MIT
++
++#include <dt-bindings/gpio/gpio.h>
++
++/include/ "fsl/p1010si-pre.dtsi"
++
++/ {
++	model = "Enterasys WS-AP3715i";
++	compatible = "enterasys,ws-ap3715i";
++
++	aliases {
++		led-boot = &led_power_green;
++		led-failsafe = &led_power_red;
++		led-running = &led_power_green;
++		led-upgrade = &led_power_red;
++		label-mac-device = &enet0;
++	};
++
++	chosen {
++		bootargs = "console=ttyS0,115200";
++	};
++
++	memory {
++		device_type = "memory";
++		reg = <0x0 0x0 0x0 0x10000000>;
++	};
++	
++	leds {
++		compatible = "gpio-leds";
++
++		wifi1 {
++			gpios = <&spi_gpio 3 GPIO_ACTIVE_HIGH>;
++			label = "green:radio1";
++			linux,default-trigger = "phy1tpt";
++		};
++
++		wifi2 {
++			gpios = <&spi_gpio 2 GPIO_ACTIVE_HIGH>;
++			label = "green:radio2";
++			linux,default-trigger = "phy0tpt";
++		};
++
++		led_power_green: power_green {
++			gpios = <&spi_gpio 0 GPIO_ACTIVE_HIGH>;
++			label = "green:power";
++		};
++
++		led_power_red: power_red {
++			gpios = <&spi_gpio 1 GPIO_ACTIVE_HIGH>;
++			label = "red:power";
++		};
++
++		lan1_red {
++			gpios = <&spi_gpio 6 GPIO_ACTIVE_HIGH>;
++			label = "red:lan1";
++		};
++
++		lan1_green {
++			gpios = <&spi_gpio 4 GPIO_ACTIVE_HIGH>;
++			label = "green:lan1";
++		};
++
++		lan2_red {
++			gpios = <&spi_gpio 7 GPIO_ACTIVE_HIGH>;
++			label = "red:lan2";
++		};
++
++		lan2_green {
++			gpios = <&spi_gpio 5 GPIO_ACTIVE_HIGH>;
++			label = "green:lan2";
++		};
++	};
++
++	soc: soc@ffe00000 {
++		ranges = <0x0 0x0 0xffe00000 0x100000>;
++
++		gpio0: gpio-controller@fc00 {
++		};
++
++		usb@22000 {
++			status = "disabled";
++		};
++
++		mdio@24000 {
++			phy0: ethernet-phy@0 {
++				reg = <0x1>;
++			};
++
++			phy2: ethernet-phy@2 {
++				reg = <0x2>;
++			};
++		};
++
++		mdio@25000 {
++			tbi_phy: tbi-phy@11 {
++				reg = <0x11>;
++			};
++		};
++
++		mdio@26000 {
++			status = "disabled";
++		};
++
++		enet0: ethernet@b0000 {
++			phy-handle = <&phy0>;
++			phy-connection-type = "rgmii-id";
++
++			label = "lan1";
++		};
++
++		enet1: ethernet@b1000 {
++			phy-handle = <&phy2>;
++			phy-connection-type = "sgmii";
++
++			tbi-handle = <&tbi_phy>;
++
++			label = "lan2";
++		};
++
++		enet2: ethernet@b2000 {
++			status = "disabled";
++		};
++
++		sdhc@2e000 {
++			status = "disabled";
++		};
++	};
++
++	ifc: ifc@ffe1e000 {
++	};
++
++	pci0: pcie@ffe09000 {
++		reg = <0 0xffe09000 0 0x1000>;
++		ranges = <0x2000000 0x0 0xa0000000 0 0xa0000000 0x0 0x20000000
++			  0x1000000 0x0 0x00000000 0 0xffc10000 0x0 0x10000>;
++		pcie@0 {
++			ranges = <0x2000000 0x0 0xa0000000
++				  0x2000000 0x0 0xa0000000
++				  0x0 0x20000000
++
++				  0x1000000 0x0 0x0
++				  0x1000000 0x0 0x0
++				  0x0 0x100000>;
++
++			wifi@0,0,0 {
++				compatible = "pci168c,0033";
++				reg = <0x0 0 0 0 0>;
++				ieee80211-freq-limit = <2400000 2500000>;
++			};
++		};
++	};
++
++	pci1: pcie@ffe0a000 {
++		reg = <0 0xffe0a000 0 0x1000>;
++		ranges = <0x2000000 0x0 0x80000000 0 0x80000000 0x0 0x20000000
++			  0x1000000 0x0 0x00000000 0 0xffc00000 0x0 0x10000>;
++		pcie@0 {
++			ranges = <0x2000000 0x0 0x80000000
++				  0x2000000 0x0 0x80000000
++				  0x0 0x20000000
++
++				  0x1000000 0x0 0x0
++				  0x1000000 0x0 0x0
++				  0x0 0x100000>;
++			
++			wifi@0,0,0 {
++				compatible = "pci168c,0033";
++				reg = <0x0 0 0 0 0>;
++				ieee80211-freq-limit = <5000000 6000000>;
++			};
++		};
++	};
++};
++
++&soc {
++	led_spi {
++		compatible = "spi-gpio";
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		sck-gpios = <&gpio0 10 GPIO_ACTIVE_HIGH>;
++		mosi-gpios = <&gpio0 11 GPIO_ACTIVE_HIGH>;
++		num-chipselects = <0>;
++
++		spi_gpio: led_gpio@0 {
++			compatible = "fairchild,74hc595";
++			reg = <0>;
++			gpio-controller;
++			#gpio-cells = <2>;
++			registers-number = <1>;
++			spi-max-frequency = <100000>;
++		};
++	};
++
++	spi0: spi@7000 {
++		flash@0 {
++			compatible = "jedec,spi-nor";
++			reg = <0>;
++			spi-max-frequency = <25000000>;
++
++			partitions {
++				compatible = "fixed-partitions";
++				#address-cells = <1>;
++				#size-cells = <1>;
++
++				partition@0 {
++					reg = <0x0 0xa0000>;
++					label = "boot-bak";
++					read-only;
++				};
++
++				partition@a0000 {
++					reg = <0xa0000 0xa0000>;
++					label = "boot-pri";
++					read-only;
++				};
++
++				partition@120000 {
++					reg = <0x120000 0x10000>;
++					label = "cfg1";
++					read-only;
++				};
++
++				partition@130000 {
++					reg = <0x130000 0x10000>;
++					label = "cfg2";
++					read-only;
++				};
++
++				partition@140000 {
++					compatible = "denx,uimage";
++					reg = <0x140000 0x1d80000>;
++					label = "firmware";
++				};
++
++				partition@1ec0000 {
++					reg = <0x1ec0000 0x100000>;
++					label = "nvram";
++					read-only;
++				};
++			};
++		};
++	};
++};
++
++/include/ "fsl/p1010si-post.dtsi"
++
++/ {
++	cpus {
++		PowerPC,P1010@0 {
++			bus-frequency = <399999996>;
++			timebase-frequency = <50000000>;
++			clock-frequency = <799999992>;
++			d-cache-block-size = <0x20>;
++			d-cache-size = <0x8000>;
++			d-cache-sets = <0x80>;
++			i-cache-block-size = <0x20>;
++			i-cache-size = <0x8000>;
++			i-cache-sets = <0x80>;
++		};
++	};
++
++	soc@ffe00000 {
++		bus-frequency = <399999996>;
++
++		serial@4600 {
++			clock-frequency = <399999996>;
++			status = "disabled";
++		};
++
++		serial@4500 {
++			clock-frequency = <399999996>;
++		};
++
++		pic@40000 {
++			clock-frequency = <399999996>;
++		};
++	};
++};
++
++/*
++ * For the OpenWrt 22.03 release, since Linux 5.10.138 now uses
++ * aliases to determine PCI domain numbers, drop aliases so as not to
++ * change the sysfs path of our wireless netdevs.
++ */
++
++/ {
++	aliases {
++		/delete-property/ pci0;
++		/delete-property/ pci1;
++	};
++};
++
+diff --git a/target/linux/mpc85xx/files/arch/powerpc/platforms/85xx/ws-ap3715i.c b/target/linux/mpc85xx/files/arch/powerpc/platforms/85xx/ws-ap3715i.c
+new file mode 100644
+index 0000000000..aa2a366b3d
+--- /dev/null
++++ b/target/linux/mpc85xx/files/arch/powerpc/platforms/85xx/ws-ap3715i.c
+@@ -0,0 +1,87 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++/*
++ * Enterasys WS-AP3715i Board Setup
++ *
++ * Copyright (C) 2023 David Bauer <mail@david-bauer.net>
++ *
++ * Based on:
++ *   p1010rdb.c:
++ *      P1010 RDB Board Setup
++ *      Copyright 2011 Freescale Semiconductor Inc.
++ *
++ * This program is free software; you can redistribute  it and/or modify it
++ * under  the terms of  the GNU General  Public License as published by the
++ * Free Software Foundation;  either version 2 of the  License, or (at your
++ * option) any later version.
++ */
++
++#include <linux/stddef.h>
++#include <linux/kernel.h>
++#include <linux/delay.h>
++#include <linux/interrupt.h>
++#include <linux/of_platform.h>
++
++#include <asm/time.h>
++#include <asm/machdep.h>
++#include <asm/pci-bridge.h>
++#include <mm/mmu_decl.h>
++#include <asm/prom.h>
++#include <asm/udbg.h>
++#include <asm/mpic.h>
++
++#include <sysdev/fsl_soc.h>
++#include <sysdev/fsl_pci.h>
++
++#include "mpc85xx.h"
++
++void __init wsap3715i_pic_init(void)
++{
++	struct mpic *mpic;
++
++	mpic = mpic_alloc(NULL, 0,
++	  MPIC_BIG_ENDIAN | MPIC_SINGLE_DEST_CPU,
++	  0, 256, " OpenPIC  ");
++
++	BUG_ON(mpic == NULL);
++	mpic_init(mpic);
++}
++
++/*
++ * Setup the architecture
++ */
++static void __init wsap3715i_setup_arch(void)
++{
++	if (ppc_md.progress)
++		ppc_md.progress("wsap3715i_setup_arch()", 0);
++
++	fsl_pci_assign_primary();
++
++	pr_info("WS-AP3715i from Enterasys\n");
++}
++
++machine_arch_initcall(wsap3715i, mpc85xx_common_publish_devices);
++
++/*
++ * Called very early, device-tree isn't unflattened
++ */
++static int __init wsap3715i_probe(void)
++{
++	if (of_machine_is_compatible("enterasys,ws-ap3715i"))
++		return 1;
++	return 0;
++}
++
++define_machine(wsap3715i) {
++	.name			= "P1010 RDB",
++	.probe			= wsap3715i_probe,
++	.setup_arch		= wsap3715i_setup_arch,
++	.init_IRQ		= wsap3715i_pic_init,
++#ifdef CONFIG_PCI
++	.pcibios_fixup_bus	= fsl_pcibios_fixup_bus,
++	.pcibios_fixup_phb      = fsl_pcibios_fixup_phb,
++#endif
++	.get_irq		= mpic_get_irq,
++	.calibrate_decr		= generic_calibrate_decr,
++	.progress		= udbg_progress,
++};
+diff --git a/target/linux/mpc85xx/image/p1010.mk b/target/linux/mpc85xx/image/p1010.mk
+index c48860152d..b9fcc13280 100644
+--- a/target/linux/mpc85xx/image/p1010.mk
++++ b/target/linux/mpc85xx/image/p1010.mk
+@@ -14,6 +14,19 @@ define Build/spi-loader-okli
+ 	mv "$@.new" "$@"
+ endef
+ 
++define Device/enterasys_ws-ap3715i
++  DEVICE_VENDOR := Enterasys
++  DEVICE_MODEL := WS-AP3715i
++  BLOCKSIZE := 64k
++  KERNEL_NAME := simpleImage.ws-ap3715i
++  KERNEL_ENTRY := 0x1000000
++  KERNEL_LOADADDR := 0x1000000
++  KERNEL = kernel-bin | lzma | uImage lzma
++  IMAGES := sysupgrade.bin
++  IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | append-metadata
++endef
++TARGET_DEVICES += enterasys_ws-ap3715i
++
+ define Device/tplink_tl-wdr4900-v1
+   DEVICE_VENDOR := TP-Link
+   DEVICE_MODEL := TL-WDR4900
+diff --git a/target/linux/mpc85xx/p1010/config-default b/target/linux/mpc85xx/p1010/config-default
+index 224f45ccb2..acda68aeb3 100644
+--- a/target/linux/mpc85xx/p1010/config-default
++++ b/target/linux/mpc85xx/p1010/config-default
+@@ -1,14 +1,18 @@
+ CONFIG_CMDLINE_OVERRIDE=y
+ # CONFIG_FSL_CORENET_CF is not set
++CONFIG_GPIO_74X164=y
+ CONFIG_MTD_NAND_FSL_IFC=y
+ CONFIG_MTD_SPLIT_FIRMWARE=y
+ CONFIG_MTD_SPLIT_TPLINK_FW=y
++CONFIG_MTD_SPLIT_UIMAGE_FW=y
+ CONFIG_MTD_UBI=y
+ CONFIG_MTD_UBI_BEB_LIMIT=20
+ CONFIG_MTD_UBI_BLOCK=y
+ CONFIG_MTD_UBI_WL_THRESHOLD=4096
+ CONFIG_REALTEK_PHY=y
+ CONFIG_RED_15W_REV1=y
++CONFIG_SPI_GPIO=y
+ CONFIG_TL_WDR4900_V1=y
+ CONFIG_UBIFS_FS=y
++CONFIG_WS_AP3715I=y
+ CONFIG_FIREBOX_T10=y
+diff --git a/target/linux/mpc85xx/p1010/target.mk b/target/linux/mpc85xx/p1010/target.mk
+index 86628e32da..fa1bb7542d 100644
+--- a/target/linux/mpc85xx/p1010/target.mk
++++ b/target/linux/mpc85xx/p1010/target.mk
+@@ -1,5 +1,5 @@
+ BOARDNAME:=P1010
+-KERNEL_IMAGES:=simpleImage.tl-wdr4900-v1
++KERNEL_IMAGES:=simpleImage.tl-wdr4900-v1 simpleImage.ws-ap3715i
+ 
+ define Target/Description
+ 	Build firmware images for P1010 based boards.
+diff --git a/target/linux/mpc85xx/patches-5.10/109-powerpc-85xx-add-ws-ap3715i-support.patch b/target/linux/mpc85xx/patches-5.10/109-powerpc-85xx-add-ws-ap3715i-support.patch
+new file mode 100644
+index 0000000000..f54166f8e6
+--- /dev/null
++++ b/target/linux/mpc85xx/patches-5.10/109-powerpc-85xx-add-ws-ap3715i-support.patch
+@@ -0,0 +1,58 @@
++diff --git a/arch/powerpc/boot/Makefile b/arch/powerpc/boot/Makefile
++index 70dedf0fe..e5c77b0c1 100644
++--- a/arch/powerpc/boot/Makefile
+++++ b/arch/powerpc/boot/Makefile
++@@ -338,6 +338,7 @@ image-$(CONFIG_TQM8560)			+= cuImage.tqm8560
++ image-$(CONFIG_SBC8548)			+= cuImage.sbc8548
++ image-$(CONFIG_KSI8560)			+= cuImage.ksi8560
++ image-$(CONFIG_TL_WDR4900_V1)		+= simpleImage.tl-wdr4900-v1
+++image-$(CONFIG_WS_AP3715I)		+= simpleImage.ws-ap3715i
++ # Board ports in arch/powerpc/platform/86xx/Kconfig
++ image-$(CONFIG_MVME7100)                += dtbImage.mvme7100
++ 
++diff --git a/arch/powerpc/boot/wrapper b/arch/powerpc/boot/wrapper
++index b5c2ba2f6..48967fdda 100755
++--- a/arch/powerpc/boot/wrapper
+++++ b/arch/powerpc/boot/wrapper
++@@ -324,6 +324,7 @@ adder875-redboot)
++     platformo="$object/fixed-head.o $object/redboot-8xx.o"
++     binary=y
++     ;;
+++simpleboot-ws-ap3715i|\
++ simpleboot-tl-wdr4900-v1)
++     platformo="$object/fixed-head.o $object/simpleboot.o"
++     link_address='0x1000000'
++diff --git a/arch/powerpc/platforms/85xx/Kconfig b/arch/powerpc/platforms/85xx/Kconfig
++index 493edf350..835f4ef11 100644
++--- a/arch/powerpc/platforms/85xx/Kconfig
+++++ b/arch/powerpc/platforms/85xx/Kconfig
++@@ -82,6 +82,17 @@ config WS_AP3710I
++ 	  This board is a Concurrent Dual-Band wireless access point with a
++ 	  Freescale P1020 SoC.
++ 
+++config WS_AP3715I
+++	bool "Enterasys WS-AP3715i"
+++	select DEFAULT_UIMAGE
+++	select ARCH_REQUIRE_GPIOLIB
+++	select GPIO_MPC8XXX
+++	help
+++	  This option enables support for the Enterasys WS-AP3715i board.
+++
+++	  This board is a Concurrent Dual-Band wireless access point with a
+++	  Freescale P1010 SoC.
+++
++ config WS_AP3825I
++ 	bool "Extreme Networks WS-AP3825i"
++ 	select DEFAULT_UIMAGE
++diff --git a/arch/powerpc/platforms/85xx/Makefile b/arch/powerpc/platforms/85xx/Makefile
++index 7e92adf49..3dc096bcf 100644
++--- a/arch/powerpc/platforms/85xx/Makefile
+++++ b/arch/powerpc/platforms/85xx/Makefile
++@@ -27,6 +27,7 @@ obj-$(CONFIG_P1023_RDB)   += p1023_rdb.o
++ obj-$(CONFIG_PANDA)       += panda.o
++ obj-$(CONFIG_TWR_P102x)   += twr_p102x.o
++ obj-$(CONFIG_WS_AP3710I)  += ws-ap3710i.o
+++obj-$(CONFIG_WS_AP3715I)  += ws-ap3715i.o
++ obj-$(CONFIG_WS_AP3825I)  += ws-ap3825i.o
++ obj-$(CONFIG_FIREBOX_T10) += firebox_t10.o
++ obj-$(CONFIG_CORENET_GENERIC)   += corenet_generic.o
+-- 
+2.34.1
+

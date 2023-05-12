@@ -9,3 +9,8 @@ device('sophos-red-15w-rev.1', 'sophos_red-15w-rev1', {
 
 device('tp-link-tl-wdr4900-v1', 'tplink_tl-wdr4900-v1')
 
+
+-- Enterasys
+device('enterasys-ws-ap3715i', 'enterasys_ws-ap3715i', {
+    factory = false
+})

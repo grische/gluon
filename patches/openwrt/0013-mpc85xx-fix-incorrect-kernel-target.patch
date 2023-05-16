@@ -1,0 +1,35 @@
+From 00b40ef00d42b9b384e72aea604bc53e39e24ac3 Mon Sep 17 00:00:00 2001
+From: David Bauer <mail@david-bauer.net>
+Date: Sun, 19 Mar 2023 21:33:32 +0100
+Subject: [PATCH] mpc85xx: fix incorrect kernel target
+
+The wrapper-image for the WL-WDR4900 was used as a build-target for the
+kernel. This workd fine as long as only a single wrapper is used with
+the OpenWrt build-system.
+
+If additional wrappers are used, the build becomes racy in the
+wrapper-stage.
+
+The wrapper images actually do not represent a target. They are built
+based on the kernel configuration. Only copy the resulting images to
+avoid race-conditions as explained.
+
+Signed-off-by: David Bauer <mail@david-bauer.net>
+---
+ target/linux/mpc85xx/p1010/target.mk | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/target/linux/mpc85xx/p1010/target.mk b/target/linux/mpc85xx/p1010/target.mk
+index 019536ff1a..86628e32da 100644
+--- a/target/linux/mpc85xx/p1010/target.mk
++++ b/target/linux/mpc85xx/p1010/target.mk
+@@ -1,5 +1,5 @@
+ BOARDNAME:=P1010
+-KERNELNAME:=simpleImage.tl-wdr4900-v1
++KERNEL_IMAGES:=simpleImage.tl-wdr4900-v1
+ 
+ define Target/Description
+ 	Build firmware images for P1010 based boards.
+-- 
+2.30.2
+

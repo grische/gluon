@@ -1,0 +1,23 @@
+From: Grische <2787581+grische@users.noreply.github.com>
+Date: Tue, 12 Dec 2023 18:17:27 +0100
+Subject: Revert "ath79: add new ar934x spi driver"
+
+This reverts commit ebf0d8dadeca443121f4f597c51bf6591e341caf.
+
+diff --git a/target/linux/ath79/dts/ar934x.dtsi b/target/linux/ath79/dts/ar934x.dtsi
+index d88c7bfabc17ced1c211b2a8f9bfa4ae8cb0bd78..687910fd7d76222d0099d0f0551c3ebd5136ae91 100644
+--- a/target/linux/ath79/dts/ar934x.dtsi
++++ b/target/linux/ath79/dts/ar934x.dtsi
+@@ -199,10 +199,11 @@
+ 		};
+ 
+ 		spi: spi@1f000000 {
+-			compatible = "qca,ar934x-spi";
++			compatible = "qca,ar9340-spi", "qca,ar7100-spi";
+ 			reg = <0x1f000000 0x1c>;
+ 
+ 			clocks = <&pll ATH79_CLK_AHB>;
++			clock-names = "ahb";
+ 
+ 			#address-cells = <1>;
+ 			#size-cells = <0>;

@@ -671,7 +671,7 @@ static void update_redirect(void) {
 		char prefix[INET6_ADDRSTRLEN];
 
 		if (router->redirected || router->expired)
-		    continue;
+			continue;
 		router->redirected = true;
 
 		snprintf(mac, sizeof(mac), F_MAC, F_MAC_VAR(router->src));

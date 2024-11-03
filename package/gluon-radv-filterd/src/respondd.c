@@ -34,7 +34,7 @@ static int parse_mode_netlink_cb(struct nl_msg *msg, void *arg)
 	uint8_t mode;
 
 	opts = batadv_container_of(query_opts, struct mode_netlink_opts,
-				   query_opts);
+								query_opts);
 
 	if (!genlmsg_valid_hdr(nlh, 0))
 		return NL_OK;
@@ -45,11 +45,11 @@ static int parse_mode_netlink_cb(struct nl_msg *msg, void *arg)
 		return NL_OK;
 
 	if (nla_parse(attrs, BATADV_ATTR_MAX, genlmsg_attrdata(ghdr, 0),
-	    genlmsg_len(ghdr), batadv_genl_policy))
+					genlmsg_len(ghdr), batadv_genl_policy))
 		return NL_OK;
 
 	if (batadv_genl_missing_attrs(attrs, mode_mandatory,
-	    BATADV_ARRAY_SIZE(mode_mandatory)))
+									BATADV_ARRAY_SIZE(mode_mandatory)))
 		return NL_OK;
 
 	mode = nla_get_u8(attrs[BATADV_ATTR_GW_MODE]);
@@ -91,15 +91,15 @@ static struct json_object * respondd_provider_statistics() {
 	struct json_object *ret = json_object_new_object();
 
 	struct mode_netlink_opts opts = {
-                .is_server = false,
-                .query_opts = {
-                        .err = 0,
-                },
-        };
+		.is_server = false,
+		.query_opts = {
+			.err = 0,
+		},
+	};
 
-        batadv_genl_query("bat0", BATADV_CMD_GET_MESH_INFO,
-                          parse_mode_netlink_cb, 0,
-                          &opts.query_opts);
+	batadv_genl_query("bat0", BATADV_CMD_GET_MESH_INFO,
+						parse_mode_netlink_cb, 0,
+						&opts.query_opts);
 
 	if (opts.is_server) {
 		// We are a batman gateway, do not write gateway6

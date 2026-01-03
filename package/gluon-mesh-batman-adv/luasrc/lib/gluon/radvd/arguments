@@ -2,16 +2,16 @@
 
 local f = io.open("/tmp/range6","r")
 if f then
-    local range6 = f:read('*a')
-    f:close()
+	local range6 = f:read('*a')
+	f:close()
 
-    io.write("-i br-client -p " .. range6)
+	io.write("-i br-client -p " .. range6)
 end
 
 local f = io.open("/tmp/addr6","r")
 if f then
-    local addr6 = f:read('*a')
-    f:close()
+	local addr6 = f:read('*a')
+	f:close()
 
-    io.write(" --rdnss " .. addr6)
+	io.write(" --rdnss " .. addr6)
 end

@@ -10,7 +10,6 @@
 #include <netlink/netlink.h>
 #include <netlink/genl/genl.h>
 
-#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,78 +34,10 @@ struct clients_netlink_opts {
 
 struct gw_netlink_opts {
 	struct json_object *obj;
+	bool is_batman_v;
 	struct batadv_nlquery_opts query_opts;
 };
 
-
-/* Algorithm detection */
-
-struct get_algoname_opts {
-	char *algoname;
-	size_t algoname_len;
-	bool found;
-	struct batadv_nlquery_opts query_opts;
-};
-
-static int get_algoname_cb(struct nl_msg *msg, void *arg) {
-	struct nlattr *attrs[BATADV_ATTR_MAX + 1];
-	struct get_algoname_opts *opts;
-	struct nlmsghdr *nlh = nlmsg_hdr(msg);
-	struct batadv_nlquery_opts *query_opts = arg;
-	static const enum batadv_nl_attrs mandatory[] = {
-		BATADV_ATTR_ALGO_NAME,
-	};
-	struct genlmsghdr *ghdr;
-	const char *algoname;
-
-	opts = batadv_container_of(query_opts, struct get_algoname_opts, query_opts);
-
-	if (!genlmsg_valid_hdr(nlh, 0))
-		return NL_OK;
-
-	ghdr = nlmsg_data(nlh);
-
-	if (ghdr->cmd != BATADV_CMD_GET_MESH)
-		return NL_OK;
-
-	if (nla_parse(attrs, BATADV_ATTR_MAX, genlmsg_attrdata(ghdr, 0),
-				genlmsg_len(ghdr), batadv_genl_policy))
-		return NL_OK;
-
-	if (batadv_genl_missing_attrs(attrs, mandatory,
-				BATADV_ARRAY_SIZE(mandatory)))
-		return NL_OK;
-
-	algoname = nla_data(attrs[BATADV_ATTR_ALGO_NAME]);
-	strncpy(opts->algoname, algoname, opts->algoname_len);
-	if (opts->algoname_len > 0)
-		opts->algoname[opts->algoname_len - 1] = '\0';
-
-	opts->found = true;
-	opts->query_opts.err = 0;
-	return NL_OK;
-}
-
-static int get_algoname(char *algoname, size_t len) {
-	struct get_algoname_opts opts = {
-		.algoname = algoname,
-		.algoname_len = len,
-		.found = false,
-		.query_opts = { .err = 0 },
-	};
-
-	int ret = batadv_genl_query("bat0", BATADV_CMD_GET_MESH,
-				get_algoname_cb, 0, &opts.query_opts);
-	if (ret < 0)
-		return ret;
-
-	if (!opts.found)
-		return -EOPNOTSUPP;
-
-	return 0;
-}
-
-/* Batman IV: gateway with TQ metric */
 
 static const enum batadv_nl_attrs gateways_iv_mandatory[] = {
 	BATADV_ATTR_ORIG_ADDRESS,
@@ -114,67 +45,13 @@ static const enum batadv_nl_attrs gateways_iv_mandatory[] = {
 	BATADV_ATTR_TQ,
 };
 
-static int parse_gw_list_iv_netlink_cb(struct nl_msg *msg, void *arg)
-{
-	struct nlattr *attrs[BATADV_ATTR_MAX+1];
-	struct nlmsghdr *nlh = nlmsg_hdr(msg);
-	struct batadv_nlquery_opts *query_opts = arg;
-	struct genlmsghdr *ghdr;
-	uint8_t *orig;
-	uint8_t *router;
-	uint8_t tq;
-	struct gw_netlink_opts *opts;
-	char addr[18];
-
-	opts = batadv_container_of(query_opts, struct gw_netlink_opts,
-			query_opts);
-
-	if (!genlmsg_valid_hdr(nlh, 0))
-		return NL_OK;
-
-	ghdr = nlmsg_data(nlh);
-
-	if (ghdr->cmd != BATADV_CMD_GET_GATEWAYS)
-		return NL_OK;
-
-	if (nla_parse(attrs, BATADV_ATTR_MAX, genlmsg_attrdata(ghdr, 0),
-				genlmsg_len(ghdr), batadv_genl_policy))
-		return NL_OK;
-
-	if (batadv_genl_missing_attrs(attrs, gateways_iv_mandatory,
-				BATADV_ARRAY_SIZE(gateways_iv_mandatory)))
-		return NL_OK;
-
-	if (!attrs[BATADV_ATTR_FLAG_BEST])
-		return NL_OK;
-
-	orig = nla_data(attrs[BATADV_ATTR_ORIG_ADDRESS]);
-	router = nla_data(attrs[BATADV_ATTR_ROUTER]);
-	tq = nla_get_u8(attrs[BATADV_ATTR_TQ]);
-
-	sprintf(addr, "%02x:%02x:%02x:%02x:%02x:%02x",
-		orig[0], orig[1], orig[2], orig[3], orig[4], orig[5]);
-
-	json_object_object_add(opts->obj, "gateway", json_object_new_string(addr));
-	json_object_object_add(opts->obj, "gateway_tq", json_object_new_int(tq));
-
-	sprintf(addr, "%02x:%02x:%02x:%02x:%02x:%02x",
-		router[0], router[1], router[2], router[3], router[4], router[5]);
-
-	json_object_object_add(opts->obj, "gateway_nexthop", json_object_new_string(addr));
-
-	return NL_STOP;
-}
-
-/* Batman V: gateway with throughput metric */
-
 static const enum batadv_nl_attrs gateways_v_mandatory[] = {
 	BATADV_ATTR_ORIG_ADDRESS,
 	BATADV_ATTR_ROUTER,
 	BATADV_ATTR_THROUGHPUT,
 };
 
-static int parse_gw_list_v_netlink_cb(struct nl_msg *msg, void *arg)
+static int parse_gw_list_netlink_cb(struct nl_msg *msg, void *arg)
 {
 	struct nlattr *attrs[BATADV_ATTR_MAX+1];
 	struct nlmsghdr *nlh = nlmsg_hdr(msg);
@@ -182,7 +59,6 @@ static int parse_gw_list_v_netlink_cb(struct nl_msg *msg, void *arg)
 	struct genlmsghdr *ghdr;
 	uint8_t *orig;
 	uint8_t *router;
-	uint32_t throughput;
 	struct gw_netlink_opts *opts;
 	char addr[18];
 
@@ -201,22 +77,34 @@ static int parse_gw_list_v_netlink_cb(struct nl_msg *msg, void *arg)
 				genlmsg_len(ghdr), batadv_genl_policy))
 		return NL_OK;
 
-	if (batadv_genl_missing_attrs(attrs, gateways_v_mandatory,
-				BATADV_ARRAY_SIZE(gateways_v_mandatory)))
-		return NL_OK;
+	if (opts->is_batman_v) {
+		if (batadv_genl_missing_attrs(attrs, gateways_v_mandatory,
+					BATADV_ARRAY_SIZE(gateways_v_mandatory)))
+			return NL_OK;
+	} else {
+		if (batadv_genl_missing_attrs(attrs, gateways_iv_mandatory,
+					BATADV_ARRAY_SIZE(gateways_iv_mandatory)))
+			return NL_OK;
+	}
 
 	if (!attrs[BATADV_ATTR_FLAG_BEST])
 		return NL_OK;
 
 	orig = nla_data(attrs[BATADV_ATTR_ORIG_ADDRESS]);
 	router = nla_data(attrs[BATADV_ATTR_ROUTER]);
-	throughput = nla_get_u32(attrs[BATADV_ATTR_THROUGHPUT]);
 
 	sprintf(addr, "%02x:%02x:%02x:%02x:%02x:%02x",
 		orig[0], orig[1], orig[2], orig[3], orig[4], orig[5]);
 
 	json_object_object_add(opts->obj, "gateway", json_object_new_string(addr));
-	json_object_object_add(opts->obj, "gateway_throughput", json_object_new_int(throughput));
+
+	if (opts->is_batman_v) {
+		uint32_t throughput = nla_get_u32(attrs[BATADV_ATTR_THROUGHPUT]);
+		json_object_object_add(opts->obj, "gateway_throughput", json_object_new_int(throughput));
+	} else {
+		uint8_t tq = nla_get_u8(attrs[BATADV_ATTR_TQ]);
+		json_object_object_add(opts->obj, "gateway_tq", json_object_new_int(tq));
+	}
 
 	sprintf(addr, "%02x:%02x:%02x:%02x:%02x:%02x",
 		router[0], router[1], router[2], router[3], router[4], router[5]);
@@ -235,18 +123,14 @@ static void add_gateway(struct json_object *obj) {
 	};
 	char algoname[256];
 
-	if (get_algoname(algoname, sizeof(algoname)) < 0)
+	if (batadv_genl_get_algoname("bat0", algoname, sizeof(algoname)) < 0)
 		return;
 
-	if (strcmp(algoname, "BATMAN_IV") == 0) {
-		batadv_genl_query("bat0", BATADV_CMD_GET_GATEWAYS,
-				parse_gw_list_iv_netlink_cb, NLM_F_DUMP,
-				&opts.query_opts);
-	} else if (strcmp(algoname, "BATMAN_V") == 0) {
-		batadv_genl_query("bat0", BATADV_CMD_GET_GATEWAYS,
-				parse_gw_list_v_netlink_cb, NLM_F_DUMP,
-				&opts.query_opts);
-	}
+	opts.is_batman_v = (strcmp(algoname, "BATMAN_V") == 0);
+
+	batadv_genl_query("bat0", BATADV_CMD_GET_GATEWAYS,
+			parse_gw_list_netlink_cb, NLM_F_DUMP,
+			&opts.query_opts);
 }
 
 static inline bool ethtool_ioctl(int fd, struct ifreq *ifr, void *data) {

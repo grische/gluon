@@ -437,22 +437,26 @@ static int parse_tt_global(struct nl_msg *msg,
 	return NL_OK;
 }
 
-/* Batman IV: parse originator with TQ metric */
+static const enum batadv_nl_attrs originator_iv_mandatory[] = {
+	BATADV_ATTR_ORIG_ADDRESS,
+	BATADV_ATTR_TQ,
+};
 
-static int parse_originator_iv(struct nl_msg *msg,
+static const enum batadv_nl_attrs originator_v_mandatory[] = {
+	BATADV_ATTR_ORIG_ADDRESS,
+	BATADV_ATTR_THROUGHPUT,
+};
+
+static int parse_originator(struct nl_msg *msg,
 		void *arg __attribute__((unused)))
 {
-	static const enum batadv_nl_attrs mandatory[] = {
-		BATADV_ATTR_ORIG_ADDRESS,
-		BATADV_ATTR_TQ,
-	};
 	struct nlattr *attrs[BATADV_ATTR_MAX + 1];
 	struct nlmsghdr *nlh = nlmsg_hdr(msg);
 	struct ether_addr mac_a;
 	struct genlmsghdr *ghdr;
 	struct router *router;
 	uint8_t *orig;
-	uint8_t tq;
+	uint32_t metric;
 
 	// parse netlink entry
 	if (!genlmsg_valid_hdr(nlh, 0))
@@ -468,70 +472,23 @@ static int parse_originator_iv(struct nl_msg *msg,
 		return NL_OK;
 	}
 
-	if (batadv_genl_missing_attrs(attrs, mandatory, ARRAY_SIZE(mandatory)))
-		return NL_OK;
-
-	orig = nla_data(attrs[BATADV_ATTR_ORIG_ADDRESS]);
-	tq = nla_get_u8(attrs[BATADV_ATTR_TQ]);
-
-	if (!attrs[BATADV_ATTR_FLAG_BEST])
-		return NL_OK;
-
-	MAC2ETHER(mac_a, orig);
-
-	// update router
-	router = router_find_orig(&mac_a);
-	if (!router)
-		return NL_OK;
-
-	DEBUG_MSG("Found TQ for router " F_MAC " (originator " F_MAC "), it's %d",
-			F_MAC_VAR(router->src), F_MAC_VAR(router->originator), tq);
-	router->metric = tq;
-	if (router->metric > G.max_metric)
-		G.max_metric = router->metric;
-
-	return NL_OK;
-}
-
-/* Batman V: parse originator with throughput metric */
-
-static int parse_originator_v(struct nl_msg *msg,
-		void *arg __attribute__((unused)))
-{
-	static const enum batadv_nl_attrs mandatory[] = {
-		BATADV_ATTR_ORIG_ADDRESS,
-		BATADV_ATTR_THROUGHPUT,
-	};
-	struct nlattr *attrs[BATADV_ATTR_MAX + 1];
-	struct nlmsghdr *nlh = nlmsg_hdr(msg);
-	struct ether_addr mac_a;
-	struct genlmsghdr *ghdr;
-	struct router *router;
-	uint8_t *orig;
-	uint32_t throughput;
-
-	// parse netlink entry
-	if (!genlmsg_valid_hdr(nlh, 0))
-		return NL_OK;
-
-	ghdr = nlmsg_data(nlh);
-
-	if (ghdr->cmd != BATADV_CMD_GET_ORIGINATORS)
-		return NL_OK;
-
-	if (nla_parse(attrs, BATADV_ATTR_MAX, genlmsg_attrdata(ghdr, 0),
-				genlmsg_len(ghdr), batadv_genl_policy)) {
-		return NL_OK;
+	if (G.algo == ALGO_BATMAN_V) {
+		if (batadv_genl_missing_attrs(attrs, originator_v_mandatory,
+					ARRAY_SIZE(originator_v_mandatory)))
+			return NL_OK;
+	} else {
+		if (batadv_genl_missing_attrs(attrs, originator_iv_mandatory,
+					ARRAY_SIZE(originator_iv_mandatory)))
+			return NL_OK;
 	}
 
-	if (batadv_genl_missing_attrs(attrs, mandatory, ARRAY_SIZE(mandatory)))
+	if (!attrs[BATADV_ATTR_FLAG_BEST])
 		return NL_OK;
 
 	orig = nla_data(attrs[BATADV_ATTR_ORIG_ADDRESS]);
-	throughput = nla_get_u32(attrs[BATADV_ATTR_THROUGHPUT]);
-
-	if (!attrs[BATADV_ATTR_FLAG_BEST])
-		return NL_OK;
+	metric = (G.algo == ALGO_BATMAN_V)
+		? nla_get_u32(attrs[BATADV_ATTR_THROUGHPUT])
+		: nla_get_u8(attrs[BATADV_ATTR_TQ]);
 
 	MAC2ETHER(mac_a, orig);
 
@@ -540,9 +497,9 @@ static int parse_originator_v(struct nl_msg *msg,
 	if (!router)
 		return NL_OK;
 
-	DEBUG_MSG("Found throughput for router " F_MAC " (originator " F_MAC "), it's %u",
-			F_MAC_VAR(router->src), F_MAC_VAR(router->originator), throughput);
-	router->metric = throughput;
+	DEBUG_MSG("Found metric for router " F_MAC " (originator " F_MAC "), it's %u",
+			F_MAC_VAR(router->src), F_MAC_VAR(router->originator), metric);
+	router->metric = metric;
 	if (router->metric > G.max_metric)
 		G.max_metric = router->metric;
 
@@ -603,9 +560,6 @@ static void update_metrics(void) {
 	bool update_originators = false;
 	struct batadv_nlquery_opts opts;
 	int ret;
-	nl_recvmsg_msg_cb_t parse_cb;
-
-	parse_cb = (G.algo == ALGO_BATMAN_IV) ? parse_originator_iv : parse_originator_v;
 
 	// reset metrics
 	foreach(router, G.routers) {
@@ -629,7 +583,7 @@ static void update_metrics(void) {
 	opts.err = 0;
 	ret = batadv_genl_query(G.mesh_iface,
 				BATADV_CMD_GET_ORIGINATORS,
-				parse_cb, NLM_F_DUMP, &opts);
+				parse_originator, NLM_F_DUMP, &opts);
 	if (ret < 0)
 		fprintf(stderr, "Parsing of originators failed\n");
 
@@ -780,73 +734,6 @@ static void invalidate_originators(void)
 	}
 }
 
-/* Algorithm detection */
-
-struct get_algoname_opts {
-	char *algoname;
-	size_t algoname_len;
-	bool found;
-	struct batadv_nlquery_opts query_opts;
-};
-
-static int get_algoname_cb(struct nl_msg *msg, void *arg) {
-	struct nlattr *attrs[BATADV_ATTR_MAX + 1];
-	struct get_algoname_opts *opts;
-	struct nlmsghdr *nlh = nlmsg_hdr(msg);
-	struct batadv_nlquery_opts *query_opts = arg;
-	static const enum batadv_nl_attrs mandatory[] = {
-		BATADV_ATTR_ALGO_NAME,
-	};
-	struct genlmsghdr *ghdr;
-	const char *algoname;
-
-	opts = batadv_container_of(query_opts, struct get_algoname_opts, query_opts);
-
-	if (!genlmsg_valid_hdr(nlh, 0))
-		return NL_OK;
-
-	ghdr = nlmsg_data(nlh);
-
-	if (ghdr->cmd != BATADV_CMD_GET_MESH)
-		return NL_OK;
-
-	if (nla_parse(attrs, BATADV_ATTR_MAX, genlmsg_attrdata(ghdr, 0),
-				genlmsg_len(ghdr), batadv_genl_policy))
-		return NL_OK;
-
-	if (batadv_genl_missing_attrs(attrs, mandatory,
-				BATADV_ARRAY_SIZE(mandatory)))
-		return NL_OK;
-
-	algoname = nla_data(attrs[BATADV_ATTR_ALGO_NAME]);
-	strncpy(opts->algoname, algoname, opts->algoname_len);
-	if (opts->algoname_len > 0)
-		opts->algoname[opts->algoname_len - 1] = '\0';
-
-	opts->found = true;
-	opts->query_opts.err = 0;
-	return NL_OK;
-}
-
-static int get_algoname(char *algoname, size_t len) {
-	struct get_algoname_opts opts = {
-		.algoname = algoname,
-		.algoname_len = len,
-		.found = false,
-		.query_opts = { .err = 0 },
-	};
-
-	int ret = batadv_genl_query(G.mesh_iface, BATADV_CMD_GET_MESH,
-				get_algoname_cb, 0, &opts.query_opts);
-	if (ret < 0)
-		return ret;
-
-	if (!opts.found)
-		return -EOPNOTSUPP;
-
-	return 0;
-}
-
 static void sighandler(int sig __attribute__((unused)))
 {
 	G.stop_daemon = 1;
@@ -878,7 +765,7 @@ int main(int argc, char *argv[]) {
 
 	{
 		char algoname[256];
-		if (get_algoname(algoname, sizeof(algoname)) < 0)
+		if (batadv_genl_get_algoname(G.mesh_iface, algoname, sizeof(algoname)) < 0)
 			exit_errmsg("Failed to detect batman-adv routing algorithm on %s", G.mesh_iface);
 
 		if (strcmp(algoname, "BATMAN_IV") == 0) {

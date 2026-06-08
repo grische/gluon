@@ -1,0 +1,12 @@
+# Periodic re-evaluation of the tunnel-throughput override.
+# The hotplug.d/iface handler only fires on netifd ifup/ifdown of the wan UCI
+# iface, so it misses intra-bridge cable moves (several role=uplink ports
+# bridged into one wan iface). Re-running the worker every 10 minutes makes
+# sure it converges within bounded time. The worker is idempotent and no-ops
+# on Batman-IV.
+#
+# GLUON_BATADV_TPO_PERIODIC=1 marks this as the periodic run so the worker
+# stays quiet about the expected "no readable uplink" state (e.g. nodes
+# whose only uplink is wireless or a USB tether) instead of logging it every
+# tick; real hotplug events still log it once.
+*/10 * * * * ACTION=ifup INTERFACE=wan GLUON_BATADV_TPO_PERIODIC=1 /lib/gluon/mesh-batman-adv/tunnel-throughput.lua

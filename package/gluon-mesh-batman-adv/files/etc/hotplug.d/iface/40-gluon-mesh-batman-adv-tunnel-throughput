@@ -1,0 +1,13 @@
+# shellcheck shell=sh disable=SC2154
+
+case "${ACTION}" in
+	ifup|ifdown) ;;
+	*) return ;;
+esac
+
+case "${INTERFACE}" in
+	wan|wan6|cellular|cellular_4|mesh_vpn) ;;
+	*) return ;;
+esac
+
+/lib/gluon/mesh-batman-adv/tunnel-throughput.lua

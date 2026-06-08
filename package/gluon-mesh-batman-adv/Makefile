@@ -18,7 +18,8 @@ define Package/gluon-mesh-batman-adv-15
 	+kmod-dummy \
 	+libnl-tiny \
 	+libbatadv \
-	+batctl
+	+batctl \
+	+micrond
 endef
 
 $(eval $(call BuildPackageGluon,gluon-mesh-batman-adv-15))

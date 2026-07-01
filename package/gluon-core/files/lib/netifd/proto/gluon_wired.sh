@@ -62,6 +62,12 @@ proto_gluon_wired_setup() {
 	if [ "$vxlan" -eq 1 ]; then
 		meshif="vx_$config"
 
+		# The ipq806x GMAC drops inbound zero-checksum IPv6/UDP frames, so send
+		# real checksums on raw L2 links; L3 tunnels stay zero-checksum. rxcsum
+		# stays 0 to keep accepting zero-checksum frames from older nodes.
+		local txcsum=1
+		is_layer3_device "$ifname" && txcsum=0
+
 		json_init
 		json_add_string name "$meshif"
 		[ -n "$func" ] && json_add_string macaddr "$(lua -e "print(require('gluon.util').generate_mac_by_name('$func'))")"
@@ -72,7 +78,7 @@ proto_gluon_wired_setup() {
 		json_add_string peer6addr "$vxpeer6addr"
 		json_add_int vid "$(lua -e 'print(tonumber(require("gluon.util").domain_seed_bytes("gluon-mesh-vxlan", 3), 16))')"
 		json_add_boolean rxcsum '0'
-		json_add_boolean txcsum '0'
+		json_add_boolean txcsum "$txcsum"
 		json_close_object
 		ubus call network add_dynamic "$(json_dump)"
 	fi
